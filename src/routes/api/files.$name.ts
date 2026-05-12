@@ -8,7 +8,7 @@ export const Route = createFileRoute("/api/files/$name")({
       GET: async ({ params }: { params: { name: string } }) => {
         const data = getFile(params.name);
         if (!data) return new Response("not found", { status: 404 });
-        return new Response(data, {
+        return new Response(data as BodyInit, {
           headers: {
             "Content-Type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
             "Content-Disposition": `attachment; filename="${params.name}"`,
