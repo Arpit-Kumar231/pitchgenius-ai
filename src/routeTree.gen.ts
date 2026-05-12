@@ -10,11 +10,17 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApiFilesNameRouteImport } from './routes/api/files.$name'
 import { Route as ApiChatStreamRouteImport } from './routes/api/chat.stream'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiFilesNameRoute = ApiFilesNameRouteImport.update({
+  id: '/api/files/$name',
+  path: '/api/files/$name',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiChatStreamRoute = ApiChatStreamRouteImport.update({
@@ -26,27 +32,31 @@ const ApiChatStreamRoute = ApiChatStreamRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/api/chat/stream': typeof ApiChatStreamRoute
+  '/api/files/$name': typeof ApiFilesNameRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/api/chat/stream': typeof ApiChatStreamRoute
+  '/api/files/$name': typeof ApiFilesNameRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/api/chat/stream': typeof ApiChatStreamRoute
+  '/api/files/$name': typeof ApiFilesNameRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/api/chat/stream'
+  fullPaths: '/' | '/api/chat/stream' | '/api/files/$name'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/api/chat/stream'
-  id: '__root__' | '/' | '/api/chat/stream'
+  to: '/' | '/api/chat/stream' | '/api/files/$name'
+  id: '__root__' | '/' | '/api/chat/stream' | '/api/files/$name'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ApiChatStreamRoute: typeof ApiChatStreamRoute
+  ApiFilesNameRoute: typeof ApiFilesNameRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -56,6 +66,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/files/$name': {
+      id: '/api/files/$name'
+      path: '/api/files/$name'
+      fullPath: '/api/files/$name'
+      preLoaderRoute: typeof ApiFilesNameRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/chat/stream': {
@@ -71,6 +88,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ApiChatStreamRoute: ApiChatStreamRoute,
+  ApiFilesNameRoute: ApiFilesNameRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
