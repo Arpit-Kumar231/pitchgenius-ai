@@ -77,7 +77,7 @@ export function ChatView() {
             <p className="text-xs text-muted-foreground">Multi-agent pitchbook generator for Relationship Managers</p>
           </div>
           <div className="ml-auto text-xs text-muted-foreground">
-            backend: <span className="text-foreground/80">{getBackendUrl()}</span>
+            backend: <span className="text-foreground/80">in-app (TanStack)</span>
           </div>
         </div>
       </header>
@@ -138,7 +138,7 @@ export function ChatView() {
             </button>
           </div>
           <p className="mt-2 text-[11px] text-muted-foreground">
-            v1 uses dummy CRM & market data. Swap in real sources in <code>backend/app/tools.py</code>.
+            v1 uses dummy CRM & market data. Swap in real sources in <code>src/lib/pitchbook/tools.server.ts</code>.
           </p>
         </div>
       </form>
