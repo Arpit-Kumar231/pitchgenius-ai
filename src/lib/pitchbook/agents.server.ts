@@ -109,8 +109,6 @@ export async function* runPitchbook(opts: {
   yield { type: "thread", thread_id: threadId };
 
   let state = THREADS.get(threadId);
-  const isFollowup = !!state;
-
   if (!state) {
     state = {
       rm_query: opts.message,
@@ -233,6 +231,3 @@ export async function* runPitchbook(opts: {
 
   yield { type: "final", answer: "Supervisor stopped without producing a pitchbook." };
 }
-
-// silence unused
-void isFollowup;
