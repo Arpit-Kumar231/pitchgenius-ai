@@ -10,33 +10,53 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApiFilesNameRouteImport } from './routes/api/files.$name'
+import { Route as ApiChatStreamRouteImport } from './routes/api/chat.stream'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiFilesNameRoute = ApiFilesNameRouteImport.update({
+  id: '/api/files/$name',
+  path: '/api/files/$name',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiChatStreamRoute = ApiChatStreamRouteImport.update({
+  id: '/api/chat/stream',
+  path: '/api/chat/stream',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/api/chat/stream': typeof ApiChatStreamRoute
+  '/api/files/$name': typeof ApiFilesNameRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/api/chat/stream': typeof ApiChatStreamRoute
+  '/api/files/$name': typeof ApiFilesNameRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/api/chat/stream': typeof ApiChatStreamRoute
+  '/api/files/$name': typeof ApiFilesNameRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/'
+  fullPaths: '/' | '/api/chat/stream' | '/api/files/$name'
   fileRoutesByTo: FileRoutesByTo
-  to: '/'
-  id: '__root__' | '/'
+  to: '/' | '/api/chat/stream' | '/api/files/$name'
+  id: '__root__' | '/' | '/api/chat/stream' | '/api/files/$name'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  ApiChatStreamRoute: typeof ApiChatStreamRoute
+  ApiFilesNameRoute: typeof ApiFilesNameRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -48,22 +68,28 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/files/$name': {
+      id: '/api/files/$name'
+      path: '/api/files/$name'
+      fullPath: '/api/files/$name'
+      preLoaderRoute: typeof ApiFilesNameRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/chat/stream': {
+      id: '/api/chat/stream'
+      path: '/api/chat/stream'
+      fullPath: '/api/chat/stream'
+      preLoaderRoute: typeof ApiChatStreamRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  ApiChatStreamRoute: ApiChatStreamRoute,
+  ApiFilesNameRoute: ApiFilesNameRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from './router.tsx'
-import type { startInstance } from './start.ts'
-declare module '@tanstack/react-start' {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-    config: Awaited<ReturnType<typeof startInstance.getOptions>>
-  }
-}

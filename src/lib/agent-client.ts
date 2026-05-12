@@ -11,7 +11,8 @@ export type StreamHandlers = {
 
 export function getBackendUrl(): string {
   const u = (import.meta as any).env?.VITE_AGENT_BACKEND_URL as string | undefined;
-  return (u || "http://localhost:8000").replace(/\/$/, "");
+  // Default to same-origin so the in-app TanStack server routes handle it.
+  return (u || "").replace(/\/$/, "");
 }
 
 export async function streamChat(
@@ -19,7 +20,7 @@ export async function streamChat(
   handlers: StreamHandlers,
   signal?: AbortSignal,
 ): Promise<void> {
-  const url = `${getBackendUrl()}/chat/stream`;
+  const url = `${getBackendUrl()}/api/chat/stream`;
   let res: Response;
   try {
     res = await fetch(url, {
