@@ -54,6 +54,8 @@ class PitchbookState(TypedDict, total=False):
     final_answer: str
     next_agent: str
     events: list[dict[str, Any]]
+    agent_plan: dict[str, bool | None]
+    ask_user_about: list[str]
 
 
 def _emit(events: list[dict[str, Any]] | None, agent: str, status: str, detail: str = "") -> list[dict[str, Any]]:
@@ -100,41 +102,71 @@ Once ppt_builder has run, choose "done". Respond as strict JSON:
 
 
 def supervisor_node(state: PitchbookState) -> PitchbookState:
-    logger.info("supervisor: enter completed=%s", state.get("completed", []))
+    logger.info("supervisor: enter completed=%s agent_plan=%s", state.get("completed", []), state.get("agent_plan"))
     completed = state.get("completed", [])
     if "ppt_builder" in completed:
         return {"next_agent": "done", "events": _emit(state.get("events"), "supervisor", "done", "pitchbook ready")}
 
-    summary = {
-        "rm_query": state.get("rm_query", ""),
-        "completed_agents": completed,
-        "has_research": bool(state.get("research")),
-        "has_crm": bool(state.get("crm")),
-        "has_competitors": bool(state.get("competitors")),
-        "has_financials": bool(state.get("financials")),
-    }
-    try:
-        msg = llm(0).invoke(
-            [SystemMessage(content=SUPERVISOR_SYSTEM), HumanMessage(content=json.dumps(summary))]
-        )
-        decision = _parse_json(msg.content) or {"next": "ppt_builder"}
-    except Exception:
-        logger.exception("supervisor: LLM call failed")
-        raise
-    nxt = decision.get("next", "ppt_builder")
-    if nxt in completed and nxt != "ppt_builder":
-        # avoid infinite loops
-        nxt = "ppt_builder"
-    logger.info("supervisor: next=%s reason=%s", nxt, decision.get("reason", ""))
-    events = _emit(state.get("events"), "supervisor", "decided", f"next={nxt} — {decision.get('reason','')}")
+    agent_plan = state.get("agent_plan", {})
+
+    needed_agents = [
+        agent for agent, should_run in agent_plan.items()
+        if should_run is True and agent not in completed
+    ]
+
+    if not needed_agents:
+        logger.info("supervisor: no more agents needed, proceeding to ppt_builder")
+        events = _emit(state.get("events"), "supervisor", "decided", "next=ppt_builder — all planned agents done")
+        return {"next_agent": "ppt_builder", "events": events}
+
+    nxt = needed_agents[0]
+    logger.info("supervisor: next=%s (from plan)", nxt)
+    events = _emit(state.get("events"), "supervisor", "decided", f"next={nxt} — from agent_plan")
     return {"next_agent": nxt, "events": events}
 
 
 def supervisor_router(state: PitchbookState) -> str:
     nxt = state.get("next_agent", "done")
-    if nxt not in {"clarifier", "market_research", "crm", "competitor", "financials", "ppt_builder", "done"}:
-        return "done"
-    return nxt
+    routes = {
+        "clarifier": "clarifier",
+        "market_research": "market_research",
+        "crm": "crm_agent",
+        "competitor": "competitor_agent",
+        "financials": "financials_agent",
+        "ppt_builder": "ppt_builder",
+        "done": END,
+    }
+    return routes.get(nxt, "done")
+
+
+CLASSIFIER_SYSTEM = """You are the Query Classifier Agent. Analyze the RM's pitchbook request and determine which data agents are needed.
+
+The RM may ask for:
+- Market/industry insights → market_research agent
+- Account/relationship/client info → crm agent
+- Competitor/peer analysis → competitor agent
+- Financial metrics/valuation/comps → financials agent
+
+For each agent, decide:
+- true: clearly needed based on the query
+- false: clearly not needed
+- null: ambiguous—ask the user to confirm
+
+Example queries:
+- "Create a market opportunity deck" → {"market_research": true, "crm": false, "competitor": false, "financials": false}
+- "Show our relationship strength vs competitors" → {"market_research": false, "crm": true, "competitor": true, "financials": false}
+- "Financial deep-dive" → {"market_research": false, "crm": false, "competitor": false, "financials": true}
+- Ambiguous → use null for unclear agents, include clarify_question
+
+Respond as strict JSON:
+{
+  "market_research": true|false|null,
+  "crm": true|false|null,
+  "competitor": true|false|null,
+  "financials": true|false|null,
+  "clarify_question": "<only if any field is null, else empty string>"
+}
+"""
 
 
 CLARIFIER_SYSTEM = """You are the Clarifier Agent. Decide if the RM's query needs ONE clarifying question
@@ -143,6 +175,51 @@ If the query already includes a clear topic AND a client (or is generic enough t
 Reply strict JSON:
 {"needs_clarification": bool, "question": "<one short question or empty>"}
 """
+
+
+def query_classifier_node(state: PitchbookState) -> PitchbookState:
+    logger.info("query_classifier: enter")
+    events = _emit(state.get("events"), "query_classifier", "running", "analyzing query to determine needed agents")
+    try:
+        msg = llm(0).invoke(
+            [SystemMessage(content=CLASSIFIER_SYSTEM), HumanMessage(content=state.get("rm_query", ""))]
+        )
+        plan = _parse_json(msg.content) or {}
+    except Exception:
+        logger.exception("query_classifier: LLM call failed")
+        raise
+
+    agent_plan = {
+        "market_research": plan.get("market_research", True),
+        "crm": plan.get("crm", True),
+        "competitor": plan.get("competitor", True),
+        "financials": plan.get("financials", True),
+    }
+
+    # Check for ambiguous agents (None values)
+    ask_about = [k for k, v in agent_plan.items() if v is None]
+
+    detail = f"plan: {{{', '.join(f'{k}={v}' for k, v in agent_plan.items() if v is not None)}}}"
+    if ask_about:
+        detail += f"; asking user about {ask_about}"
+
+    completed = state.get("completed", []) + ["query_classifier"]
+    events = _emit(events, "query_classifier", "done", detail)
+
+    return {
+        "agent_plan": agent_plan,
+        "ask_user_about": ask_about,
+        "completed": completed,
+        "events": events,
+    }
+
+
+def query_classifier_router(state: PitchbookState) -> str:
+    """Route after classifier: ask user if ambiguous, else go to clarifier."""
+    ask_about = state.get("ask_user_about", [])
+    if ask_about:
+        return "ask_user_for_plan"
+    return "clarifier"
 
 
 def clarifier_node(state: PitchbookState) -> PitchbookState:
@@ -231,6 +308,7 @@ def ppt_builder_node(state: PitchbookState) -> PitchbookState:
 
 def build_graph():
     g = StateGraph(PitchbookState)
+    g.add_node("query_classifier", query_classifier_node)
     g.add_node("supervisor", supervisor_node)
     g.add_node("clarifier", clarifier_node)
     g.add_node("market_research", market_research_node)
@@ -239,27 +317,36 @@ def build_graph():
     g.add_node("financials_agent", financials_node)
     g.add_node("ppt_builder", ppt_builder_node)
 
-    g.set_entry_point("supervisor")
+    g.set_entry_point("query_classifier")
+
     g.add_conditional_edges(
-        "supervisor",
-        supervisor_router,
-        {
-            "clarifier": "clarifier",
-            "market_research": "market_research",
-            "crm": "crm_agent",
-            "competitor": "competitor_agent",
-            "financials": "financials_agent",
-            "ppt_builder": "ppt_builder",
-            "done": END,
-        },
+        "query_classifier",
+        query_classifier_router,
+        {"ask_user_for_plan": END, "clarifier": "clarifier"},
     )
 
     def after_clarifier(state: PitchbookState) -> str:
         return "ask_user" if state.get("needs_clarification") else "supervisor"
 
     g.add_conditional_edges("clarifier", after_clarifier, {"ask_user": END, "supervisor": "supervisor"})
+
+    g.add_conditional_edges(
+        "supervisor",
+        supervisor_router,
+        {
+            "clarifier": "clarifier",
+            "market_research": "market_research",
+            "crm_agent": "crm_agent",
+            "competitor_agent": "competitor_agent",
+            "financials_agent": "financials_agent",
+            "ppt_builder": "ppt_builder",
+            END: END,
+        },
+    )
+
     for n in ["market_research", "crm_agent", "competitor_agent", "financials_agent"]:
         g.add_edge(n, "supervisor")
+
     g.add_edge("ppt_builder", END)
     return g.compile()
 
