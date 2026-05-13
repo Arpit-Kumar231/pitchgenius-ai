@@ -126,9 +126,6 @@ def build_pitchbook(
     template_path: str | None = None,
 ) -> str:
     prs = _blank_deck(template_path)
-    # Pick a blank-ish layout. python-pptx convention: index 6 is "Blank" in the
-    # default template; for custom templates we fall back to the LAST layout
-    # (typically the simplest), which is safer than assuming index 6 exists.
     layouts = prs.slide_layouts
     blank = layouts[6] if len(layouts) > 6 else layouts[len(layouts) - 1]
 

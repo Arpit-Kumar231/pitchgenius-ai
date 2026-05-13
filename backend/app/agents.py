@@ -71,7 +71,6 @@ def _parse_json(text: str) -> dict[str, Any]:
     try:
         return json.loads(t)
     except Exception:
-        # try to find a JSON object in the text
         start = t.find("{")
         end = t.rfind("}")
         if start >= 0 and end > start:
@@ -235,9 +234,9 @@ def build_graph():
     g.add_node("supervisor", supervisor_node)
     g.add_node("clarifier", clarifier_node)
     g.add_node("market_research", market_research_node)
-    g.add_node("crm", crm_node)
-    g.add_node("competitor", competitor_node)
-    g.add_node("financials", financials_node)
+    g.add_node("crm_agent", crm_node)
+    g.add_node("competitor_agent", competitor_node)
+    g.add_node("financials_agent", financials_node)
     g.add_node("ppt_builder", ppt_builder_node)
 
     g.set_entry_point("supervisor")
@@ -247,9 +246,9 @@ def build_graph():
         {
             "clarifier": "clarifier",
             "market_research": "market_research",
-            "crm": "crm",
-            "competitor": "competitor",
-            "financials": "financials",
+            "crm": "crm_agent",
+            "competitor": "competitor_agent",
+            "financials": "financials_agent",
             "ppt_builder": "ppt_builder",
             "done": END,
         },
@@ -259,7 +258,7 @@ def build_graph():
         return "ask_user" if state.get("needs_clarification") else "supervisor"
 
     g.add_conditional_edges("clarifier", after_clarifier, {"ask_user": END, "supervisor": "supervisor"})
-    for n in ["market_research", "crm", "competitor", "financials"]:
+    for n in ["market_research", "crm_agent", "competitor_agent", "financials_agent"]:
         g.add_edge(n, "supervisor")
     g.add_edge("ppt_builder", END)
     return g.compile()
