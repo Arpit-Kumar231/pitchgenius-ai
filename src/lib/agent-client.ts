@@ -9,18 +9,31 @@ export type StreamHandlers = {
   onError?: (msg: string) => void;
 };
 
+export type TemplateInfo = {
+  id: string;
+  name: string;
+  slide_count: number;
+  layouts: string[];
+  fonts: string[];
+};
+
 export function getBackendUrl(): string {
   const u = (import.meta as any).env?.VITE_AGENT_BACKEND_URL as string | undefined;
-  // Default to same-origin so the in-app TanStack server routes handle it.
-  return (u || "").replace(/\/$/, "");
+  return (u || "http://localhost:8000").replace(/\/$/, "");
 }
 
 export async function streamChat(
-  body: { thread_id?: string | null; message: string; client?: string; topic?: string },
+  body: {
+    thread_id?: string | null;
+    message: string;
+    client?: string;
+    topic?: string;
+    template_id?: string | null;
+  },
   handlers: StreamHandlers,
   signal?: AbortSignal,
 ): Promise<void> {
-  const url = `${getBackendUrl()}/api/chat/stream`;
+  const url = `${getBackendUrl()}/chat/stream`;
   let res: Response;
   try {
     res = await fetch(url, {
@@ -30,11 +43,16 @@ export async function streamChat(
       signal,
     });
   } catch (e) {
-    handlers.onError?.(`Cannot reach backend at ${getBackendUrl()}. Set VITE_AGENT_BACKEND_URL.`);
+    handlers.onError?.(
+      `Cannot reach backend at ${getBackendUrl()}. Is the Python server running? ` +
+      `Set VITE_AGENT_BACKEND_URL in .env if it's not on http://localhost:8000.`,
+    );
     return;
   }
   if (!res.ok || !res.body) {
-    handlers.onError?.(`Backend error ${res.status}`);
+    let detail = "";
+    try { detail = await res.text(); } catch {}
+    handlers.onError?.(`Backend error ${res.status}${detail ? `: ${detail.slice(0, 300)}` : ""}`);
     return;
   }
   const reader = res.body.getReader();
@@ -64,4 +82,22 @@ export async function streamChat(
       else if (event === "error") handlers.onError?.(parsed.message);
     }
   }
+}
+
+export async function listTemplates(): Promise<TemplateInfo[]> {
+  const r = await fetch(`${getBackendUrl()}/templates`);
+  if (!r.ok) throw new Error(`templates list failed: ${r.status}`);
+  const j = await r.json();
+  return j.templates ?? [];
+}
+
+export async function uploadTemplate(file: File): Promise<TemplateInfo> {
+  const fd = new FormData();
+  fd.append("file", file);
+  const r = await fetch(`${getBackendUrl()}/templates/upload`, { method: "POST", body: fd });
+  if (!r.ok) {
+    const t = await r.text().catch(() => "");
+    throw new Error(`upload failed (${r.status}): ${t.slice(0, 300)}`);
+  }
+  return r.json();
 }
