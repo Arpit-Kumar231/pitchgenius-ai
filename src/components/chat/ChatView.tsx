@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Download, Send, User, Sparkles, AlertCircle } from "lucide-react";
 import { AgentBadge } from "./AgentBadge";
+import { TemplateManager } from "./TemplateManager";
 import { getBackendUrl, streamChat, type AgentEvent, type FinalPayload } from "@/lib/agent-client";
 
 type Message = {
@@ -23,6 +24,7 @@ export function ChatView() {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [threadId, setThreadId] = useState<string | null>(null);
+  const [templateId, setTemplateId] = useState<string | null>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -45,7 +47,7 @@ export function ChatView() {
 
     const events: AgentEvent[] = [];
     await streamChat(
-      { thread_id: threadId, message: text },
+      { thread_id: threadId, message: text, template_id: templateId },
       {
         onThread: (id) => setThreadId(id),
         onAgent: (e) => {
@@ -77,12 +79,15 @@ export function ChatView() {
             <p className="text-xs text-muted-foreground">Multi-agent pitchbook generator for Relationship Managers</p>
           </div>
           <div className="ml-auto text-xs text-muted-foreground">
-            backend: <span className="text-foreground/80">in-app (TanStack)</span>
+            backend: <span className="text-foreground/80">{getBackendUrl()}</span>
           </div>
         </div>
       </header>
 
       <div ref={scrollerRef} className="flex-1 overflow-y-auto px-6 py-6">
+        <div className="mx-auto mb-6 max-w-3xl">
+          <TemplateManager selectedId={templateId} onSelect={setTemplateId} />
+        </div>
         {messages.length === 0 ? (
           <div className="mx-auto max-w-2xl text-center">
             <div className="mx-auto mb-4 h-px w-24 gold-rule" />
@@ -138,7 +143,7 @@ export function ChatView() {
             </button>
           </div>
           <p className="mt-2 text-[11px] text-muted-foreground">
-            v1 uses dummy CRM & market data. Swap in real sources in <code>src/lib/pitchbook/tools.server.ts</code>.
+            v1 uses dummy CRM & market data. Swap real sources in <code>backend/app/tools.py</code>.
           </p>
         </div>
       </form>
