@@ -11,6 +11,7 @@ Supervisor coordinates specialized sub-agents:
 from __future__ import annotations
 
 import json
+import logging
 import os
 from typing import Annotated, Any, TypedDict
 
@@ -26,6 +27,8 @@ from .tools import (
     fetch_financial_metrics,
     fetch_market_research,
 )
+
+logger = logging.getLogger("pitchbook.agents")
 
 MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 
@@ -47,6 +50,7 @@ class PitchbookState(TypedDict, total=False):
     competitors: dict[str, Any]
     financials: dict[str, Any]
     ppt_path: str
+    template_path: str
     final_answer: str
     next_agent: str
     events: list[dict[str, Any]]
@@ -97,6 +101,7 @@ Once ppt_builder has run, choose "done". Respond as strict JSON:
 
 
 def supervisor_node(state: PitchbookState) -> PitchbookState:
+    logger.info("supervisor: enter completed=%s", state.get("completed", []))
     completed = state.get("completed", [])
     if "ppt_builder" in completed:
         return {"next_agent": "done", "events": _emit(state.get("events"), "supervisor", "done", "pitchbook ready")}
@@ -109,14 +114,19 @@ def supervisor_node(state: PitchbookState) -> PitchbookState:
         "has_competitors": bool(state.get("competitors")),
         "has_financials": bool(state.get("financials")),
     }
-    msg = llm(0).invoke(
-        [SystemMessage(content=SUPERVISOR_SYSTEM), HumanMessage(content=json.dumps(summary))]
-    )
-    decision = _parse_json(msg.content) or {"next": "ppt_builder"}
+    try:
+        msg = llm(0).invoke(
+            [SystemMessage(content=SUPERVISOR_SYSTEM), HumanMessage(content=json.dumps(summary))]
+        )
+        decision = _parse_json(msg.content) or {"next": "ppt_builder"}
+    except Exception:
+        logger.exception("supervisor: LLM call failed")
+        raise
     nxt = decision.get("next", "ppt_builder")
     if nxt in completed and nxt != "ppt_builder":
         # avoid infinite loops
         nxt = "ppt_builder"
+    logger.info("supervisor: next=%s reason=%s", nxt, decision.get("reason", ""))
     events = _emit(state.get("events"), "supervisor", "decided", f"next={nxt} — {decision.get('reason','')}")
     return {"next_agent": nxt, "events": events}
 
@@ -137,11 +147,16 @@ Reply strict JSON:
 
 
 def clarifier_node(state: PitchbookState) -> PitchbookState:
+    logger.info("clarifier: enter")
     events = _emit(state.get("events"), "clarifier", "running", "evaluating query completeness")
-    msg = llm(0).invoke(
-        [SystemMessage(content=CLARIFIER_SYSTEM), HumanMessage(content=state.get("rm_query", ""))]
-    )
-    out = _parse_json(msg.content) or {"needs_clarification": False, "question": ""}
+    try:
+        msg = llm(0).invoke(
+            [SystemMessage(content=CLARIFIER_SYSTEM), HumanMessage(content=state.get("rm_query", ""))]
+        )
+        out = _parse_json(msg.content) or {"needs_clarification": False, "question": ""}
+    except Exception:
+        logger.exception("clarifier: LLM call failed")
+        raise
     completed = state.get("completed", []) + ["clarifier"]
     events = _emit(events, "clarifier", "done", "needs more info" if out.get("needs_clarification") else "query is clear")
     return {
@@ -153,6 +168,7 @@ def clarifier_node(state: PitchbookState) -> PitchbookState:
 
 
 def market_research_node(state: PitchbookState) -> PitchbookState:
+    logger.info("market_research: enter")
     events = _emit(state.get("events"), "market_research", "running", "fetching market & industry data")
     data = fetch_market_research(state.get("topic") or state.get("rm_query", ""))
     completed = state.get("completed", []) + ["market_research"]
@@ -161,6 +177,7 @@ def market_research_node(state: PitchbookState) -> PitchbookState:
 
 
 def crm_node(state: PitchbookState) -> PitchbookState:
+    logger.info("crm: enter")
     events = _emit(state.get("events"), "crm", "running", "querying internal CRM")
     data = fetch_crm_account(state.get("client") or "Prospective Client")
     completed = state.get("completed", []) + ["crm"]
@@ -169,6 +186,7 @@ def crm_node(state: PitchbookState) -> PitchbookState:
 
 
 def competitor_node(state: PitchbookState) -> PitchbookState:
+    logger.info("competitor: enter")
     events = _emit(state.get("events"), "competitor", "running", "scanning peer landscape")
     data = fetch_competitor_landscape(state.get("topic") or state.get("rm_query", ""))
     completed = state.get("completed", []) + ["competitor"]
@@ -177,6 +195,7 @@ def competitor_node(state: PitchbookState) -> PitchbookState:
 
 
 def financials_node(state: PitchbookState) -> PitchbookState:
+    logger.info("financials: enter")
     events = _emit(state.get("events"), "financials", "running", "computing financial metrics")
     data = fetch_financial_metrics(state.get("client") or state.get("topic", ""))
     completed = state.get("completed", []) + ["financials"]
@@ -185,16 +204,23 @@ def financials_node(state: PitchbookState) -> PitchbookState:
 
 
 def ppt_builder_node(state: PitchbookState) -> PitchbookState:
+    logger.info("ppt_builder: enter template=%s", state.get("template_path") or "<none>")
     events = _emit(state.get("events"), "ppt_builder", "running", "assembling slides from template")
-    path = build_pitchbook(
-        topic=state.get("topic") or state.get("rm_query", "Pitchbook"),
-        client=state.get("client") or "Prospective Client",
-        research=state.get("research") or {},
-        crm=state.get("crm") or {},
-        competitors=state.get("competitors") or {},
-        financials=state.get("financials") or {},
-    )
+    try:
+        path = build_pitchbook(
+            topic=state.get("topic") or state.get("rm_query", "Pitchbook"),
+            client=state.get("client") or "Prospective Client",
+            research=state.get("research") or {},
+            crm=state.get("crm") or {},
+            competitors=state.get("competitors") or {},
+            financials=state.get("financials") or {},
+            template_path=state.get("template_path"),
+        )
+    except Exception:
+        logger.exception("ppt_builder: failed to build deck")
+        raise
     completed = state.get("completed", []) + ["ppt_builder"]
+    logger.info("ppt_builder: done -> %s", path)
     events = _emit(events, "ppt_builder", "done", os.path.basename(path))
     final = (
         f"Pitchbook draft ready for **{state.get('client') or 'the client'}** on "
