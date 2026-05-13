@@ -18,6 +18,7 @@ When you ingest your real templates later, swap `_blank_deck()` for
 """
 from __future__ import annotations
 
+import logging
 import os
 import uuid
 from typing import Any
@@ -26,6 +27,8 @@ from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE
 from pptx.util import Inches, Pt
+
+logger = logging.getLogger("pitchbook.ppt")
 
 OUT_DIR = os.environ.get("PPT_OUT_DIR", "/tmp/pitchbooks")
 os.makedirs(OUT_DIR, exist_ok=True)
@@ -37,7 +40,22 @@ DARK = RGBColor(0x1A, 0x1A, 0x1A)
 MUTED = RGBColor(0x6B, 0x6B, 0x6B)
 
 
-def _blank_deck() -> Presentation:
+def _blank_deck(template_path: str | None = None) -> Presentation:
+    """Return a new Presentation. If a template path is given, inherit its
+    slide masters, layouts, theme colors and fonts. We CLEAR any pre-existing
+    slides from the template so we never leak source-deck content."""
+    if template_path and os.path.isfile(template_path):
+        try:
+            prs = Presentation(template_path)
+            # Drop any slides that came with the template — keep masters/layouts only
+            xml_slides = prs.slides._sldIdLst  # type: ignore[attr-defined]
+            for sld in list(xml_slides):
+                xml_slides.remove(sld)
+            logger.info("Using template %s (masters=%d, layouts inherited)",
+                        os.path.basename(template_path), len(prs.slide_masters))
+            return prs
+        except Exception:
+            logger.exception("Template load failed, falling back to blank deck")
     prs = Presentation()
     prs.slide_width = Inches(13.333)
     prs.slide_height = Inches(7.5)
@@ -105,9 +123,14 @@ def build_pitchbook(
     crm: dict[str, Any],
     competitors: dict[str, Any],
     financials: dict[str, Any],
+    template_path: str | None = None,
 ) -> str:
-    prs = _blank_deck()
-    blank = prs.slide_layouts[6]
+    prs = _blank_deck(template_path)
+    # Pick a blank-ish layout. python-pptx convention: index 6 is "Blank" in the
+    # default template; for custom templates we fall back to the LAST layout
+    # (typically the simplest), which is safer than assuming index 6 exists.
+    layouts = prs.slide_layouts
+    blank = layouts[6] if len(layouts) > 6 else layouts[len(layouts) - 1]
 
     # 1 Cover ----------------------------------------------------------------
     s = prs.slides.add_slide(blank)
