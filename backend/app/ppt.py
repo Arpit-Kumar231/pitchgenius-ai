@@ -1,3 +1,6 @@
+
+
+
 """Pitchbook PPT builder.
 
 Generates an investment-banking style deck. The structure mirrors the
@@ -47,8 +50,7 @@ def _blank_deck(template_path: str | None = None) -> Presentation:
     if template_path and os.path.isfile(template_path):
         try:
             prs = Presentation(template_path)
-            # Drop any slides that came with the template — keep masters/layouts only
-            xml_slides = prs.slides._sldIdLst  # type: ignore[attr-defined]
+            xml_slides = prs.slides._sldIdLst  
             for sld in list(xml_slides):
                 xml_slides.remove(sld)
             logger.info("Using template %s (masters=%d, layouts inherited)",
