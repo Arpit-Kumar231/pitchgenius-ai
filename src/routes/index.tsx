@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { ChatView } from "@/components/chat/ChatView";
+import { EditorView } from "@/components/chat/EditorView";
 
 export const Route = createFileRoute("/")({
   component: Index,
@@ -14,7 +14,7 @@ export const Route = createFileRoute("/")({
 function Index() {
   return (
     <main className="h-screen">
-      <ChatView />
+      <EditorView />
     </main>
   );
 }

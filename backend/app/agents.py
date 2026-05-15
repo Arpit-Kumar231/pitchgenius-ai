@@ -20,7 +20,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 
-from .ppt import build_pitchbook
+from .layouts import catalogue_for_prompt, validate_slide
 from .tools import (
     fetch_competitor_landscape,
     fetch_crm_account,
@@ -49,8 +49,8 @@ class PitchbookState(TypedDict, total=False):
     crm: dict[str, Any]
     competitors: dict[str, Any]
     financials: dict[str, Any]
-    ppt_path: str
-    template_path: str
+    slides: list[dict[str, Any]]
+    deck_meta: dict[str, str]
     final_answer: str
     next_agent: str
     events: list[dict[str, Any]]
@@ -92,11 +92,11 @@ Available sub-agents:
 - crm: internal CRM/account & relationship data for the target client
 - competitor: comparative analysis vs peers (use when RM asks "how are others doing")
 - financials: financial metrics, valuation, deal comps
-- ppt_builder: assemble final pitchbook (call ONLY after data gathering, exactly once)
+- planner: assemble slide deck from gathered data (call ONLY after data gathering, exactly once)
 - done: finish
 
 Decide the SINGLE next agent to invoke. Do not repeat agents already in completed_agents.
-Once ppt_builder has run, choose "done". Respond as strict JSON:
+Once planner has run, choose "done". Respond as strict JSON:
 {"next": "<agent>", "reason": "<short reason>"}
 """
 
@@ -104,7 +104,7 @@ Once ppt_builder has run, choose "done". Respond as strict JSON:
 def supervisor_node(state: PitchbookState) -> PitchbookState:
     logger.info("supervisor: enter completed=%s agent_plan=%s", state.get("completed", []), state.get("agent_plan"))
     completed = state.get("completed", [])
-    if "ppt_builder" in completed:
+    if "planner" in completed:
         return {"next_agent": "done", "events": _emit(state.get("events"), "supervisor", "done", "pitchbook ready")}
 
     agent_plan = state.get("agent_plan", {})
@@ -115,9 +115,9 @@ def supervisor_node(state: PitchbookState) -> PitchbookState:
     ]
 
     if not needed_agents:
-        logger.info("supervisor: no more agents needed, proceeding to ppt_builder")
-        events = _emit(state.get("events"), "supervisor", "decided", "next=ppt_builder — all planned agents done")
-        return {"next_agent": "ppt_builder", "events": events}
+        logger.info("supervisor: no more agents needed, proceeding to planner")
+        events = _emit(state.get("events"), "supervisor", "decided", "next=planner — all planned agents done")
+        return {"next_agent": "planner", "events": events}
 
     nxt = needed_agents[0]
     logger.info("supervisor: next=%s (from plan)", nxt)
@@ -133,7 +133,7 @@ def supervisor_router(state: PitchbookState) -> str:
         "crm": "crm_agent",
         "competitor": "competitor_agent",
         "financials": "financials_agent",
-        "ppt_builder": "ppt_builder",
+        "planner": "planner",
         "done": END,
     }
     return routes.get(nxt, "done")
@@ -279,31 +279,102 @@ def financials_node(state: PitchbookState) -> PitchbookState:
     return {"financials": data, "completed": completed, "events": events}
 
 
-def ppt_builder_node(state: PitchbookState) -> PitchbookState:
-    logger.info("ppt_builder: enter template=%s", state.get("template_path") or "<none>")
-    events = _emit(state.get("events"), "ppt_builder", "running", "assembling slides from template")
+PLANNER_SYSTEM = f"""You are the Slide Planner Agent. Given gathered data, design a 6–10 slide
+investment-banking pitchbook by emitting a JSON list of slides. Each slide has
+a layoutId from the catalogue below, plus `props` that match its shape exactly.
+
+Available layouts:
+{catalogue_for_prompt()}
+
+Rules:
+- First slide MUST be a `cover`. Last slide MUST be a `closing`.
+- Insert 1–2 `section_divider` slides between major sections.
+- Use `metric_grid` for KPIs (market size, financials).
+- Use `peer_table` for competitive comps.
+- Use `bullet_list` or `two_column` for narrative slides.
+- Be specific — pull real numbers and names from the gathered data.
+- Keep text tight: bullet bodies ≤ 18 words, headings ≤ 8 words.
+- All `props` keys/values must match the shape exactly. No extra keys.
+
+Respond with strict JSON, no prose, no markdown fences:
+{{"title": "<deck title>", "slides": [{{"layoutId": "...", "props": {{...}}}}, ...]}}
+"""
+
+
+def planner_node(state: PitchbookState) -> PitchbookState:
+    logger.info("planner: enter")
+    events = _emit(state.get("events"), "planner", "running", "designing deck structure")
+
+    context = {
+        "rm_query": state.get("rm_query"),
+        "client": state.get("client"),
+        "topic": state.get("topic"),
+        "research": state.get("research"),
+        "crm": state.get("crm"),
+        "competitors": state.get("competitors"),
+        "financials": state.get("financials"),
+    }
+
     try:
-        path = build_pitchbook(
-            topic=state.get("topic") or state.get("rm_query", "Pitchbook"),
-            client=state.get("client") or "Prospective Client",
-            research=state.get("research") or {},
-            crm=state.get("crm") or {},
-            competitors=state.get("competitors") or {},
-            financials=state.get("financials") or {},
-            template_path=state.get("template_path"),
+        msg = llm(0.3).invoke(
+            [
+                SystemMessage(content=PLANNER_SYSTEM),
+                HumanMessage(
+                    content=(
+                        "Build the pitchbook deck. Gathered data:\n```json\n"
+                        + json.dumps(context, default=str, indent=2)
+                        + "\n```"
+                    )
+                ),
+            ]
         )
+        plan = _parse_json(msg.content) or {}
     except Exception:
-        logger.exception("ppt_builder: failed to build deck")
+        logger.exception("planner: LLM call failed")
         raise
-    completed = state.get("completed", []) + ["ppt_builder"]
-    logger.info("ppt_builder: done -> %s", path)
-    events = _emit(events, "ppt_builder", "done", os.path.basename(path))
+
+    raw_slides = plan.get("slides", []) or []
+    valid_slides: list[dict[str, Any]] = []
+    for i, s in enumerate(raw_slides):
+        layout_id = s.get("layoutId")
+        props = s.get("props") or {}
+        ok, err = validate_slide(layout_id, props)
+        if not ok:
+            logger.warning("planner: dropping invalid slide #%d: %s", i, err)
+            continue
+        valid_slides.append({"id": f"s{i}", "layoutId": layout_id, "props": props})
+
+    if not valid_slides:
+        # Fallback: emit a minimal cover so the UI isn't empty.
+        valid_slides = [{
+            "id": "s0",
+            "layoutId": "cover",
+            "props": {
+                "title": state.get("topic") or "Pitchbook",
+                "client": state.get("client") or "Prospective Client",
+                "subtitle": "Draft — planner could not generate slides; please refine the prompt.",
+            },
+        }]
+
+    completed = state.get("completed", []) + ["planner"]
+    events = _emit(events, "planner", "done", f"{len(valid_slides)} slides")
+    deck_meta = {
+        "title": plan.get("title") or (state.get("topic") or "Pitchbook"),
+        "client": state.get("client") or "",
+    }
     final = (
-        f"Pitchbook draft ready for **{state.get('client') or 'the client'}** on "
+        f"Drafted **{len(valid_slides)} slides** for "
+        f"**{state.get('client') or 'the client'}** on "
         f"**{state.get('topic') or state.get('rm_query','')}**. "
-        f"Download the deck below and tell me what to refine."
+        f"Click any slide and tell me what to refine."
     )
-    return {"ppt_path": path, "completed": completed, "events": events, "final_answer": final}
+    return {
+        "slides": valid_slides,
+        "deck_meta": deck_meta,
+        "completed": completed,
+        "events": events,
+        "final_answer": final,
+    }
 
 
 def build_graph():
@@ -315,7 +386,7 @@ def build_graph():
     g.add_node("crm_agent", crm_node)
     g.add_node("competitor_agent", competitor_node)
     g.add_node("financials_agent", financials_node)
-    g.add_node("ppt_builder", ppt_builder_node)
+    g.add_node("planner", planner_node)
 
     g.set_entry_point("query_classifier")
 
@@ -339,7 +410,7 @@ def build_graph():
             "crm_agent": "crm_agent",
             "competitor_agent": "competitor_agent",
             "financials_agent": "financials_agent",
-            "ppt_builder": "ppt_builder",
+            "planner": "planner",
             END: END,
         },
     )
@@ -347,8 +418,59 @@ def build_graph():
     for n in ["market_research", "crm_agent", "competitor_agent", "financials_agent"]:
         g.add_edge(n, "supervisor")
 
-    g.add_edge("ppt_builder", END)
+    g.add_edge("planner", END)
     return g.compile()
 
 
 GRAPH = build_graph()
+
+
+# ---- Edit agent (single-shot, separate from main graph) -------------------
+
+EDITOR_SYSTEM = f"""You are the Slide Editor Agent. The user wants to refine an existing
+pitchbook. You receive the current deck (list of slides with layoutId and props)
+and an instruction. Decide which slides to change and emit a JSON list of patches.
+
+Available layouts:
+{catalogue_for_prompt()}
+
+Rules:
+- Each patch replaces ONE slide entirely. Output the FULL new slide, not a diff.
+- You may change the layoutId if the new layout fits better.
+- Keep `props` shape valid for the chosen layoutId. No extra keys.
+- If the user says "this slide" or "the current slide", target activeSlideIndex.
+- If unclear, prefer minimal targeted edits over rewriting the whole deck.
+
+Respond with strict JSON, no prose, no fences:
+{{"patches": [{{"index": <int>, "slide": {{"layoutId": "...", "props": {{...}}}}}}, ...],
+ "summary": "<one sentence about what you changed>"}}
+"""
+
+
+def run_editor(deck: dict[str, Any], instruction: str, active_index: int | None) -> dict[str, Any]:
+    """Returns {"patches": [...], "summary": "..."} with validated slides only."""
+    user = {
+        "instruction": instruction,
+        "activeSlideIndex": active_index,
+        "deck": deck,
+    }
+    msg = llm(0.3).invoke([
+        SystemMessage(content=EDITOR_SYSTEM),
+        HumanMessage(content=json.dumps(user, default=str, indent=2)),
+    ])
+    out = _parse_json(msg.content) or {}
+    patches = out.get("patches") or []
+    valid = []
+    for p in patches:
+        idx = p.get("index")
+        slide = p.get("slide") or {}
+        layout_id = slide.get("layoutId")
+        props = slide.get("props") or {}
+        ok, err = validate_slide(layout_id, props)
+        if not isinstance(idx, int) or not ok:
+            logger.warning("editor: dropped invalid patch idx=%s err=%s", idx, err)
+            continue
+        existing = (deck.get("slides") or [])
+        sid = existing[idx]["id"] if 0 <= idx < len(existing) and "id" in existing[idx] else f"s{idx}"
+        valid.append({"index": idx, "slide": {"id": sid, "layoutId": layout_id, "props": props}})
+    return {"patches": valid, "summary": out.get("summary") or "Updated deck."}
