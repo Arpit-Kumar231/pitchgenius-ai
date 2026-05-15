@@ -1,5 +1,12 @@
 export type AgentEvent = { agent: string; status: string; detail?: string };
-export type FinalPayload = { answer: string; ppt_url?: string; ppt_filename?: string };
+export type FinalPayload = { answer: string };
+
+export type SlideAddEvent = {
+  index: number;
+  slide: { id: string; layoutId: string; props: unknown };
+};
+export type SlideReplaceEvent = SlideAddEvent;
+export type DeckMetaEvent = { title?: string; client?: string };
 
 export type StreamHandlers = {
   onThread?: (id: string) => void;
@@ -7,14 +14,9 @@ export type StreamHandlers = {
   onClarify?: (q: string) => void;
   onFinal?: (p: FinalPayload) => void;
   onError?: (msg: string) => void;
-};
-
-export type TemplateInfo = {
-  id: string;
-  name: string;
-  slide_count: number;
-  layouts: string[];
-  fonts: string[];
+  onSlideAdd?: (e: SlideAddEvent) => void;
+  onSlideReplace?: (e: SlideReplaceEvent) => void;
+  onDeckMeta?: (e: DeckMetaEvent) => void;
 };
 
 export function getBackendUrl(): string {
@@ -22,18 +24,12 @@ export function getBackendUrl(): string {
   return (u || "http://localhost:8000").replace(/\/$/, "");
 }
 
-export async function streamChat(
-  body: {
-    thread_id?: string | null;
-    message: string;
-    client?: string;
-    topic?: string;
-    template_id?: string | null;
-  },
+async function streamSse(
+  url: string,
+  body: unknown,
   handlers: StreamHandlers,
   signal?: AbortSignal,
 ): Promise<void> {
-  const url = `${getBackendUrl()}/chat/stream`;
   let res: Response;
   try {
     res = await fetch(url, {
@@ -80,24 +76,25 @@ export async function streamChat(
       else if (event === "clarify") handlers.onClarify?.(parsed.question);
       else if (event === "final") handlers.onFinal?.(parsed);
       else if (event === "error") handlers.onError?.(parsed.message);
+      else if (event === "slide.add") handlers.onSlideAdd?.(parsed);
+      else if (event === "slide.replace") handlers.onSlideReplace?.(parsed);
+      else if (event === "deck.meta") handlers.onDeckMeta?.(parsed);
     }
   }
 }
 
-export async function listTemplates(): Promise<TemplateInfo[]> {
-  const r = await fetch(`${getBackendUrl()}/templates`);
-  if (!r.ok) throw new Error(`templates list failed: ${r.status}`);
-  const j = await r.json();
-  return j.templates ?? [];
+export function streamChat(
+  body: { thread_id?: string | null; message: string; client?: string; topic?: string },
+  handlers: StreamHandlers,
+  signal?: AbortSignal,
+) {
+  return streamSse(`${getBackendUrl()}/chat/stream`, body, handlers, signal);
 }
 
-export async function uploadTemplate(file: File): Promise<TemplateInfo> {
-  const fd = new FormData();
-  fd.append("file", file);
-  const r = await fetch(`${getBackendUrl()}/templates/upload`, { method: "POST", body: fd });
-  if (!r.ok) {
-    const t = await r.text().catch(() => "");
-    throw new Error(`upload failed (${r.status}): ${t.slice(0, 300)}`);
-  }
-  return r.json();
+export function streamEdit(
+  body: { instruction: string; deck: unknown; activeSlideIndex?: number | null },
+  handlers: StreamHandlers,
+  signal?: AbortSignal,
+) {
+  return streamSse(`${getBackendUrl()}/edit/stream`, body, handlers, signal);
 }
