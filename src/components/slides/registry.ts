@@ -6,6 +6,7 @@ import { MetricGrid, metricGridSchema } from "./layouts/MetricGrid";
 import { PeerTable, peerTableSchema } from "./layouts/PeerTable";
 import { TwoColumn, twoColumnSchema } from "./layouts/TwoColumn";
 import { Closing, closingSchema } from "./layouts/Closing";
+import { CustomHtml, customHtmlSchema } from "./layouts/CustomHtml";
 import { z } from "zod";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -58,6 +59,13 @@ export const LAYOUTS: Record<string, LayoutDef<any>> = {
     description: "Thank-you slide with contacts",
     schema: closingSchema,
     Component: Closing,
+  },
+  custom_html: {
+    id: "custom_html",
+    name: "Custom (AI-generated)",
+    description: "Fully AI-designed slide. HTML + inline CSS on a 1920x1080 canvas.",
+    schema: customHtmlSchema,
+    Component: CustomHtml,
   },
 };
 
