@@ -79,6 +79,29 @@ LAYOUTS: dict[str, dict] = {
             "bank": "string (optional)",
         },
     },
+    "custom_html": {
+        "name": "Custom AI-designed slide",
+        "description": (
+            "ESCAPE HATCH for bespoke, Gamma-style slides whose structure does NOT fit any "
+            "other layout above. You author the entire slide as HTML+CSS on a 1920x1080 canvas. "
+            "Prefer this whenever the user asks for a unique visual treatment, an unusual layout, "
+            "a diagram, a hero/banner, a quote slide, a process flow, a timeline, a stat hero, etc."
+        ),
+        "props_shape": {
+            "html": (
+                "string (required) — a single self-contained HTML fragment that fills the "
+                "1920x1080 canvas. Rules: use ONLY inline styles or one top-level <style> block "
+                "whose selectors are all prefixed with `.ai-slide-root ` to avoid leaking. "
+                "Absolute positioning is fine. NO <script>, NO event handlers, NO external "
+                "stylesheets, NO <link>/<iframe>. You MAY use inline <svg> for shapes/icons. "
+                "Use Google-style web-safe fonts (Inter, Georgia, system-ui). Use rich typography, "
+                "generous whitespace, accent colors, gradients, and grid/flex layouts. Think like "
+                "a senior pitch designer at McKinsey/Goldman — not a basic bullet slide."
+            ),
+            "background": "string (optional) — CSS background for the slide root, e.g. linear-gradient(...) or #0a1628",
+            "notes": "string (optional) — short note describing the slide intent (for the editor agent later)",
+        },
+    },
 }
 
 
@@ -107,6 +130,7 @@ def validate_slide(layout_id: str, props: dict) -> tuple[bool, str]:
         "peer_table": ["title", "columns", "rows"],
         "two_column": ["title", "left", "right"],
         "closing": ["contacts"],
+        "custom_html": ["html"],
     }[layout_id]
     for k in required:
         if k not in props:
