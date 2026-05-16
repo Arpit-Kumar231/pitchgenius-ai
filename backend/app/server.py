@@ -136,6 +136,13 @@ async def chat_stream(req: ChatRequest):
                 "clarify",
                 {"question": final_state.get("clarifying_question", "Could you share more details?")},
             )
+        elif final_state.get("ask_user_about"):
+            agents = final_state.get("ask_user_about", [])
+            pretty = ", ".join(agents)
+            yield _sse(
+                "clarify",
+                {"question": f"Should I include these agents? ({pretty}) — reply yes/no or list the ones you want."},
+            )
         else:
             meta = final_state.get("deck_meta") or {}
             if meta:
