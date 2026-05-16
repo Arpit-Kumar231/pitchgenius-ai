@@ -10,6 +10,7 @@ type DeckState = {
   upsertSlide: (index: number, slide: SlideSpec) => void;
   replaceSlide: (index: number, slide: SlideSpec) => void;
   removeSlide: (index: number) => void;
+  addSlide: (index: number, slide: SlideSpec) => void;
   setMeta: (m: { title?: string; client?: string }) => void;
 };
 
@@ -39,5 +40,11 @@ export const useDeck = create<DeckState>((set) => ({
       deck: { ...s.deck, slides: s.deck.slides.filter((_, i) => i !== index) },
       activeIndex: Math.max(0, Math.min(s.activeIndex, s.deck.slides.length - 2)),
     })),
+  addSlide: (index, slide) =>
+    set((s) => {
+      const next = [...s.deck.slides];
+      next.splice(index, 0, slide);
+      return { deck: { ...s.deck, slides: next }, activeIndex: index };
+    }),
   setMeta: (m) => set((s) => ({ deck: { ...s.deck, ...m } })),
 }));

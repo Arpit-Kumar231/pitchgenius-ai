@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import uuid
 from typing import Annotated, Any, TypedDict
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
@@ -509,13 +510,17 @@ GRAPH = build_graph()
 
 EDITOR_SYSTEM = f"""You are the Slide Editor Agent. The user wants to refine an existing
 pitchbook. You receive the current deck (list of slides with layoutId and props)
-and an instruction. Decide which slides to change and emit a JSON list of patches.
+and an instruction. Decide which slides to change, replace, or add. Emit a JSON list of patches.
 
 Available layouts:
 {catalogue_for_prompt()}
 
 Rules:
-- Each patch replaces ONE slide entirely. Output the FULL new slide, not a diff.
+- REPLACE patch: Changes an existing slide entirely. Output the FULL new slide, not a diff.
+- ADD patch: Inserts a NEW slide at a given index. Pushes existing slides after it forward.
+- If the user asks for "more slides", "add another slide", "add a section", "add X more",
+  emit ADD patches to insert new slides.
+- If the user asks to change/edit/refine an existing slide, use REPLACE patch.
 - You may change the layoutId if the new layout fits better. In particular, if the user
   asks for a redesign, a new visual treatment, a custom diagram, or "make this look more
   like X", switch to `custom_html` and author the slide as full HTML+inline CSS.
@@ -529,13 +534,14 @@ Rules:
   `.ai-slide-root`-scoped <style>, no scripts/handlers/external resources.
 
 Respond with strict JSON, no prose, no fences:
-{{"patches": [{{"index": <int>, "slide": {{"layoutId": "...", "props": {{...}}}}}}, ...],
+{{"patches": [{{"action": "replace|add", "index": <int>, "slide": {{"layoutId": "...", "props": {{...}}}}}}, ...],
  "summary": "<one sentence about what you changed>"}}
 """
 
 
 def run_editor(deck: dict[str, Any], instruction: str, active_index: int | None) -> dict[str, Any]:
-    """Returns {"patches": [...], "summary": "..."} with validated slides only."""
+    """Returns {"patches": [...], "summary": "..."} with validated slides only.
+    Patches can be either "replace" (modify existing) or "add" (insert new) operations."""
     user = {
         "instruction": instruction,
         "activeSlideIndex": active_index,
@@ -549,15 +555,26 @@ def run_editor(deck: dict[str, Any], instruction: str, active_index: int | None)
     patches = out.get("patches") or []
     valid = []
     for p in patches:
+        action = p.get("action", "replace")  # default to replace for backwards compat
         idx = p.get("index")
         slide = p.get("slide") or {}
         layout_id = slide.get("layoutId")
         props = slide.get("props") or {}
         ok, err = validate_slide(layout_id, props)
         if not isinstance(idx, int) or not ok:
-            logger.warning("editor: dropped invalid patch idx=%s err=%s", idx, err)
+            logger.warning("editor: dropped invalid patch idx=%s action=%s err=%s", idx, action, err)
             continue
-        existing = (deck.get("slides") or [])
-        sid = existing[idx]["id"] if 0 <= idx < len(existing) and "id" in existing[idx] else f"s{idx}"
-        valid.append({"index": idx, "slide": {"id": sid, "layoutId": layout_id, "props": props}})
+        
+        # For add patches, generate a new ID. For replace, preserve existing ID.
+        if action == "add":
+            sid = f"s{idx}_{uuid.uuid4().hex[:8]}"
+        else:
+            existing = (deck.get("slides") or [])
+            sid = existing[idx]["id"] if 0 <= idx < len(existing) and "id" in existing[idx] else f"s{idx}"
+        
+        valid.append({
+            "action": action,
+            "index": idx,
+            "slide": {"id": sid, "layoutId": layout_id, "props": props}
+        })
     return {"patches": valid, "summary": out.get("summary") or "Updated deck."}

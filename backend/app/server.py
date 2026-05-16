@@ -179,7 +179,11 @@ async def edit_stream(req: EditRequest):
             return
         patches = result.get("patches", [])
         for p in patches:
-            yield _sse("slide.replace", p)
+            action = p.get("action", "replace")
+            if action == "add":
+                yield _sse("slide.add", {"index": p.get("index"), "slide": p.get("slide")})
+            else:  # replace
+                yield _sse("slide.replace", p)
         yield _sse("agent", {"agent": "editor", "status": "done",
                              "detail": f"{len(patches)} slide{'s' if len(patches) != 1 else ''} updated"})
         yield _sse("final", {"answer": result.get("summary", "Updated.")})

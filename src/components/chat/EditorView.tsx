@@ -38,6 +38,7 @@ export function EditorView() {
   const setDeckMeta = useDeck((s) => s.setMeta);
   const upsertSlide = useDeck((s) => s.upsertSlide);
   const replaceSlide = useDeck((s) => s.replaceSlide);
+  const addSlide = useDeck((s) => s.addSlide);
   const resetDeck = useDeck((s) => s.reset);
 
   const hasDeck = deck.slides.length > 0;
@@ -68,7 +69,7 @@ export function EditorView() {
       onError: (msg: string) => update({ error: msg }),
       onDeckMeta: (m: { title?: string; client?: string }) => setDeckMeta(m),
       onSlideAdd: (e: { index: number; slide: { id: string; layoutId: string; props: unknown } }) =>
-        upsertSlide(e.index, e.slide as never),
+        addSlide(e.index, e.slide as never),
       onSlideReplace: (e: { index: number; slide: { id: string; layoutId: string; props: unknown } }) =>
         replaceSlide(e.index, e.slide as never),
     };
