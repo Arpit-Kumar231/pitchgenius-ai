@@ -56,6 +56,11 @@ class PitchbookState(TypedDict, total=False):
     events: list[dict[str, Any]]
     agent_plan: dict[str, bool | None]
     ask_user_about: list[str]
+    # Resume hints carried forward from a prior turn that paused for user input.
+    prior_agent_plan: dict[str, bool | None]
+    ask_user_about_prev: list[str]
+    resume_from_clarifier: bool
+    user_reply: str
 
 
 def _emit(events: list[dict[str, Any]] | None, agent: str, status: str, detail: str = "") -> list[dict[str, Any]]:
