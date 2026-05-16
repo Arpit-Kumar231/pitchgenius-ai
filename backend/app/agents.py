@@ -56,6 +56,11 @@ class PitchbookState(TypedDict, total=False):
     events: list[dict[str, Any]]
     agent_plan: dict[str, bool | None]
     ask_user_about: list[str]
+    # Resume hints carried forward from a prior turn that paused for user input.
+    prior_agent_plan: dict[str, bool | None]
+    ask_user_about_prev: list[str]
+    resume_from_clarifier: bool
+    user_reply: str
 
 
 def _emit(events: list[dict[str, Any]] | None, agent: str, status: str, detail: str = "") -> list[dict[str, Any]]:
@@ -169,6 +174,18 @@ Respond as strict JSON:
 """
 
 
+PLAN_RESOLVER_SYSTEM = """You are resolving an ambiguous agent plan based on the RM's reply.
+You will receive: (a) the current agent plan (some values may be null/ambiguous),
+(b) the list of agents we asked the user about, (c) the user's reply.
+Update ONLY the ambiguous entries to true/false based on the reply. Be permissive:
+if the user mentions an agent (e.g. "use competitor and financials"), mark those true
+and mark the other ambiguous ones false. If the reply is unrelated, default the
+remaining ambiguous entries to false so we can proceed.
+
+Respond as strict JSON: {"market_research": bool, "crm": bool, "competitor": bool, "financials": bool}
+"""
+
+
 CLARIFIER_SYSTEM = """You are the Clarifier Agent. Decide if the RM's query needs ONE clarifying question
 to produce a high-quality pitchbook (e.g. missing client name, missing topic focus, missing geography).
 If the query already includes a clear topic AND a client (or is generic enough to proceed), return needs_clarification=false.
@@ -178,7 +195,53 @@ Reply strict JSON:
 
 
 def query_classifier_node(state: PitchbookState) -> PitchbookState:
-    logger.info("query_classifier: enter")
+    logger.info("query_classifier: enter resume=%s prev_ask=%s",
+                state.get("resume_from_clarifier"), state.get("ask_user_about_prev"))
+
+    # Resume path A: previous turn paused at clarifier for free-text info.
+    # Keep the prior agent_plan, skip re-classification.
+    if state.get("resume_from_clarifier") and state.get("prior_agent_plan"):
+        plan = state["prior_agent_plan"]
+        agent_plan = {k: (True if v is None else v) for k, v in plan.items()}
+        events = _emit(state.get("events"), "query_classifier", "done",
+                       "resuming with existing plan after clarifier reply")
+        completed = state.get("completed", []) + ["query_classifier"]
+        return {"agent_plan": agent_plan, "ask_user_about": [],
+                "completed": completed, "events": events}
+
+    # Resume path B: previous turn paused because classifier was ambiguous.
+    # Use the user's reply to resolve only the ambiguous entries.
+    if state.get("ask_user_about_prev") and state.get("prior_agent_plan"):
+        events = _emit(state.get("events"), "query_classifier", "running",
+                       "resolving ambiguous agents from your reply")
+        prior = state["prior_agent_plan"]
+        try:
+            payload = {
+                "current_plan": prior,
+                "ambiguous_agents": state["ask_user_about_prev"],
+                "user_reply": state.get("rm_query", ""),
+            }
+            msg = llm(0).invoke([
+                SystemMessage(content=PLAN_RESOLVER_SYSTEM),
+                HumanMessage(content=json.dumps(payload)),
+            ])
+            resolved = _parse_json(msg.content) or {}
+        except Exception:
+            logger.exception("query_classifier: resolver LLM failed")
+            resolved = {}
+        agent_plan = {}
+        for k, v in prior.items():
+            if v is None:
+                rv = resolved.get(k)
+                agent_plan[k] = bool(rv) if isinstance(rv, bool) else False
+            else:
+                agent_plan[k] = v
+        detail = "resolved plan: {" + ", ".join(f"{k}={v}" for k, v in agent_plan.items()) + "}"
+        events = _emit(events, "query_classifier", "done", detail)
+        completed = state.get("completed", []) + ["query_classifier"]
+        return {"agent_plan": agent_plan, "ask_user_about": [],
+                "completed": completed, "events": events}
+
     events = _emit(state.get("events"), "query_classifier", "running", "analyzing query to determine needed agents")
     try:
         msg = llm(0).invoke(

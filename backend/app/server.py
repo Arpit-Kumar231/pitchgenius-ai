@@ -66,15 +66,31 @@ def _initial_state(req: ChatRequest, prior: dict[str, Any] | None) -> dict[str, 
         "rm_query": req.message,
         "client": req.client or (prior or {}).get("client") or "",
         "topic": req.topic or (prior or {}).get("topic") or "",
-        "completed": (prior or {}).get("completed", []) if prior and prior.get("needs_clarification") else [],
+        "completed": [],
         "events": [],
     }
-    if prior and prior.get("needs_clarification"):
-        for k in ("research", "crm", "competitors", "financials"):
-            if prior.get(k):
-                state[k] = prior[k]
-        state["rm_query"] = f"{prior.get('rm_query','')} || RM follow-up: {req.message}"
-        state["completed"] = []
+    if not prior:
+        return state
+
+    # Carry forward any data agents already ran in a prior turn.
+    for k in ("research", "crm", "competitors", "financials"):
+        if prior.get(k):
+            state[k] = prior[k]
+
+    prior_plan = prior.get("agent_plan")
+    prev_ask = prior.get("ask_user_about") or []
+
+    if prior.get("needs_clarification"):
+        # Clarifier asked a free-text question (e.g. "which client?"). Resume.
+        state["rm_query"] = f"{prior.get('rm_query','')} || RM reply: {req.message}"
+        state["resume_from_clarifier"] = True
+        if prior_plan:
+            state["prior_agent_plan"] = prior_plan
+    elif prev_ask and prior_plan:
+        # Classifier was ambiguous and asked the user. Resolve from this reply.
+        state["prior_agent_plan"] = prior_plan
+        state["ask_user_about_prev"] = prev_ask
+        state["rm_query"] = f"{prior.get('rm_query','')} || RM reply: {req.message}"
     return state
 
 
@@ -119,6 +135,13 @@ async def chat_stream(req: ChatRequest):
             yield _sse(
                 "clarify",
                 {"question": final_state.get("clarifying_question", "Could you share more details?")},
+            )
+        elif final_state.get("ask_user_about"):
+            agents = final_state.get("ask_user_about", [])
+            pretty = ", ".join(agents)
+            yield _sse(
+                "clarify",
+                {"question": f"Should I include these agents? ({pretty}) — reply yes/no or list the ones you want."},
             )
         else:
             meta = final_state.get("deck_meta") or {}
