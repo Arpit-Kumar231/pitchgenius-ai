@@ -30,7 +30,7 @@ from .tools import (
 
 logger = logging.getLogger("pitchbook.agents")
 
-MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o")
 
 
 def llm(temperature: float = 0.2) -> ChatOpenAI:
@@ -280,21 +280,39 @@ def financials_node(state: PitchbookState) -> PitchbookState:
 
 
 PLANNER_SYSTEM = f"""You are the Slide Planner Agent. Given gathered data, design a 6–10 slide
-investment-banking pitchbook by emitting a JSON list of slides. Each slide has
-a layoutId from the catalogue below, plus `props` that match its shape exactly.
+investment-banking pitchbook by emitting a JSON list of slides. You think like a senior
+pitch designer at Goldman Sachs / McKinsey: each slide should feel intentional, on-brand,
+and visually distinct — NOT a uniform stack of bullets.
+
+You have two modes for each slide:
+  (A) Pick a curated layout from the catalogue and fill its props. Fast and consistent.
+  (B) Use `custom_html` to author a fully bespoke slide (HTML + inline CSS on a 1920x1080
+      canvas). Use this whenever the user's request implies a unique visual treatment, an
+      unusual structure, a diagram, a quote, a stat hero, a process flow, a timeline, an
+      org chart, a roadmap, or anything the curated layouts don't capture cleanly.
+
+Aim for a mix: ~30-60% custom_html for visual variety, the rest curated layouts for
+structured content (metrics, peer tables, bullets) where consistency matters.
 
 Available layouts:
 {catalogue_for_prompt()}
 
 Rules:
-- First slide MUST be a `cover`. Last slide MUST be a `closing`.
+- First slide MUST be a `cover` (or `custom_html` styled as a cover if the brief is very
+  brand-specific). Last slide MUST be a `closing`.
 - Insert 1–2 `section_divider` slides between major sections.
 - Use `metric_grid` for KPIs (market size, financials).
 - Use `peer_table` for competitive comps.
 - Use `bullet_list` or `two_column` for narrative slides.
+- Use `custom_html` for hero stats, quote slides, diagrams, timelines, opening visuals,
+  or anything the curated set would render awkwardly.
 - Be specific — pull real numbers and names from the gathered data.
 - Keep text tight: bullet bodies ≤ 18 words, headings ≤ 8 words.
 - All `props` keys/values must match the shape exactly. No extra keys.
+- For `custom_html`: the `html` MUST be a single fragment that visually fills 1920x1080.
+  Use absolute positioning, flex, or grid. Scope any <style> block selectors to
+  `.ai-slide-root` to prevent style leakage. NO <script>, NO event handlers, NO external
+  stylesheets, NO <link>/<iframe>. Inline <svg> is encouraged for shapes/icons.
 
 Respond with strict JSON, no prose, no markdown fences:
 {{"title": "<deck title>", "slides": [{{"layoutId": "...", "props": {{...}}}}, ...]}}
@@ -436,10 +454,17 @@ Available layouts:
 
 Rules:
 - Each patch replaces ONE slide entirely. Output the FULL new slide, not a diff.
-- You may change the layoutId if the new layout fits better.
+- You may change the layoutId if the new layout fits better. In particular, if the user
+  asks for a redesign, a new visual treatment, a custom diagram, or "make this look more
+  like X", switch to `custom_html` and author the slide as full HTML+inline CSS.
+- If the current slide is already `custom_html` and the user asks for an HTML/CSS tweak
+  (colors, layout, copy, add a chart, change the background), edit the `html` string
+  directly and keep `custom_html` as the layoutId.
 - Keep `props` shape valid for the chosen layoutId. No extra keys.
 - If the user says "this slide" or "the current slide", target activeSlideIndex.
 - If unclear, prefer minimal targeted edits over rewriting the whole deck.
+- For `custom_html`: same canvas rules apply — 1920x1080, inline styles or a single
+  `.ai-slide-root`-scoped <style>, no scripts/handlers/external resources.
 
 Respond with strict JSON, no prose, no fences:
 {{"patches": [{{"index": <int>, "slide": {{"layoutId": "...", "props": {{...}}}}}}, ...],
