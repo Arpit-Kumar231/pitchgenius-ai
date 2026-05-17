@@ -4,6 +4,8 @@ import type { Deck, SlideSpec } from "@/components/slides/types";
 type DeckState = {
   deck: Deck;
   activeIndex: number;
+  activeTemplateId: string | null;
+  setActiveTemplateId: (id: string | null) => void;
   setDeck: (d: Deck) => void;
   reset: () => void;
   setActive: (i: number) => void;
@@ -19,6 +21,8 @@ const empty: Deck = { title: "Untitled Pitchbook", client: "", slides: [] };
 export const useDeck = create<DeckState>((set) => ({
   deck: empty,
   activeIndex: 0,
+  activeTemplateId: null,
+  setActiveTemplateId: (id) => set({ activeTemplateId: id }),
   setDeck: (d) => set({ deck: d, activeIndex: 0 }),
   reset: () => set({ deck: empty, activeIndex: 0 }),
   setActive: (i) => set({ activeIndex: i }),

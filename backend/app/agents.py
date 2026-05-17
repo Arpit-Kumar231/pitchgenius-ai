@@ -61,6 +61,9 @@ class PitchbookState(TypedDict, total=False):
     ask_user_about_prev: list[str]
     resume_from_clarifier: bool
     user_reply: str
+    active_template_id: str
+    active_template_catalogue: str
+    design_brief: dict[str, Any]
 
 
 def _emit(events: list[dict[str, Any]] | None, agent: str, status: str, detail: str = "") -> list[dict[str, Any]]:
@@ -191,6 +194,19 @@ to produce a high-quality pitchbook (e.g. missing client name, missing topic foc
 If the query already includes a clear topic AND a client (or is generic enough to proceed), return needs_clarification=false.
 Reply strict JSON:
 {"needs_clarification": bool, "question": "<one short question or empty>"}
+"""
+
+
+DESIGN_BRIEF_SYSTEM = """You are the Art Director. Pick a cohesive design brief for an
+investment-banking pitchbook. Choose a palette that fits the topic (NOT generic blue),
+a font pairing with personality, and ONE distinctive visual motif to repeat across every
+slide so the deck feels designed, not generated. Respond as strict JSON, no prose:
+{
+  "palette": {"bg":"#hex (dominant 60%)","ink":"#hex (text)","accent":"#hex (10% pop)","muted":"#hex"},
+  "fontPair": {"display":"<CSS font-family for headings>","body":"<CSS font-family for body>"},
+  "motif": "<one sentence describing a repeating visual element>",
+  "vibe": "<one word: editorial | brutalist | minimal | luxe | technical>"
+}
 """
 
 
@@ -347,6 +363,14 @@ investment-banking pitchbook by emitting a JSON list of slides. You think like a
 pitch designer at Goldman Sachs / McKinsey: each slide should feel intentional, on-brand,
 and visually distinct — NOT a uniform stack of bullets.
 
+You will receive a `design_brief` (palette + fontPair + motif). You MUST honor it on
+every slide — same palette, same display/body fonts, and the motif appears on every
+`custom_html` slide. This is what makes the deck feel designed.
+
+You may also receive an `active_template` with reusable dynamic_tsx layouts the user
+uploaded. When their structure matches the slide's purpose, prefer them over
+custom_html. Reference them as: {{"layoutId":"dynamic_tsx","props":{{"templateId":"<tid>","layoutId":"<lid>","data":{{...}}}}}}.
+
 You have two modes for each slide:
   (A) Pick a curated layout from the catalogue and fill its props. Fast and consistent.
   (B) Use `custom_html` to author a fully bespoke slide (HTML + inline CSS on a 1920x1080
@@ -376,6 +400,16 @@ Rules:
   Use absolute positioning, flex, or grid. Scope any <style> block selectors to
   `.ai-slide-root` to prevent style leakage. NO <script>, NO event handlers, NO external
   stylesheets, NO <link>/<iframe>. Inline <svg> is encouraged for shapes/icons.
+- For `custom_html` design quality (this is what separates AI slop from real decks):
+    * Use the design_brief palette EXACTLY. Background = palette.bg. Accent = palette.accent.
+    * 60/30/10 dominance — one color does 60%, secondary 30%, accent 10%. Never equal weight.
+    * Display headings 96-160px in palette.fontPair.display. Body 28-40px.
+    * The motif from design_brief appears on every custom_html slide.
+    * NEVER center body text. Left-align paragraphs and lists.
+    * Include at least one decorative inline <svg> per slide (shape, line, blob, grid).
+    * For numbers/KPIs use a 96px+ stat with a small label underneath.
+    * Add generous whitespace: minimum 96px page padding.
+    * Vary layout across slides — never two identical custom_html structures in a row.
 
 Respond with strict JSON, no prose, no markdown fences:
 {{"title": "<deck title>", "slides": [{{"layoutId": "...", "props": {{...}}}}, ...]}}
@@ -386,6 +420,18 @@ def planner_node(state: PitchbookState) -> PitchbookState:
     logger.info("planner: enter")
     events = _emit(state.get("events"), "planner", "running", "designing deck structure")
 
+    # ---- 1. Pick a design brief once per deck (palette + motif + typography) ----
+    brief_msg = llm(0.7).invoke([
+        SystemMessage(content=DESIGN_BRIEF_SYSTEM),
+        HumanMessage(content=f"RM brief: {state.get('rm_query','')}\nClient: {state.get('client','')}\nTopic: {state.get('topic','')}"),
+    ])
+    design_brief = _parse_json(brief_msg.content) or {
+        "palette": {"bg": "#0a1628", "ink": "#f5f3ee", "accent": "#c9a84c", "muted": "#4a5568"},
+        "fontPair": {"display": "Georgia, serif", "body": "Inter, system-ui"},
+        "motif": "thin gold rule beneath every title",
+    }
+    logger.info("planner: design_brief=%s", design_brief)
+
     context = {
         "rm_query": state.get("rm_query"),
         "client": state.get("client"),
@@ -394,6 +440,8 @@ def planner_node(state: PitchbookState) -> PitchbookState:
         "crm": state.get("crm"),
         "competitors": state.get("competitors"),
         "financials": state.get("financials"),
+        "design_brief": design_brief,
+        "active_template": state.get("active_template_catalogue", ""),
     }
 
     try:
@@ -455,6 +503,7 @@ def planner_node(state: PitchbookState) -> PitchbookState:
         "completed": completed,
         "events": events,
         "final_answer": final,
+        "design_brief": design_brief,
     }
 
 
@@ -539,16 +588,30 @@ Respond with strict JSON, no prose, no fences:
 """
 
 
-def run_editor(deck: dict[str, Any], instruction: str, active_index: int | None) -> dict[str, Any]:
+def run_editor(
+    deck: dict[str, Any],
+    instruction: str,
+    active_index: int | None,
+    edit_history: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Returns {"patches": [...], "summary": "..."} with validated slides only.
     Patches can be either "replace" (modify existing) or "add" (insert new) operations."""
+    history = edit_history or []
+    # Build a "lessons learned" hint: if the user asked twice for the same kind
+    # of change, surface it so the model doesn't repeat the mistake.
+    lessons = ""
+    if history:
+        recent = history[-6:]
+        lessons = "\n# Prior edit attempts in this thread (avoid repeating the same mistake):\n"
+        for h in recent:
+            lessons += f"- '{h.get('instruction','')[:140]}' → {h.get('summary','')[:140]}\n"
     user = {
         "instruction": instruction,
         "activeSlideIndex": active_index,
         "deck": deck,
     }
     msg = llm(0.3).invoke([
-        SystemMessage(content=EDITOR_SYSTEM),
+        SystemMessage(content=EDITOR_SYSTEM + lessons),
         HumanMessage(content=json.dumps(user, default=str, indent=2)),
     ])
     out = _parse_json(msg.content) or {}
