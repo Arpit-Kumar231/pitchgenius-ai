@@ -2,10 +2,22 @@ import { Component, useEffect, useMemo, useState, type ReactNode } from "react";
 import * as React from "react";
 import * as Babel from "@babel/standalone";
 import { z } from "zod";
-import { motion } from "framer-motion-stub";
 import { Logo } from "./primitives/Logo";
 import { Chart } from "./primitives/Chart";
 import { getBackendUrl } from "@/lib/agent-client";
+
+// Lightweight motion stub so generated TSX can reference `motion.div` etc.
+// without us pulling in framer-motion. Forwards all props to a plain element.
+const motion: Record<string, React.FC<Record<string, unknown>>> = new Proxy(
+  {},
+  {
+    get: (_t, tag: string) => {
+      const Comp: React.FC<Record<string, unknown>> = (props) =>
+        React.createElement(tag, props);
+      return Comp;
+    },
+  },
+) as never;
 
 /**
  * Compiles AI-generated TSX (one schema + one component, no imports) and renders
