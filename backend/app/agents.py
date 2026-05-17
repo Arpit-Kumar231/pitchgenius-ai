@@ -389,6 +389,18 @@ def planner_node(state: PitchbookState) -> PitchbookState:
     logger.info("planner: enter")
     events = _emit(state.get("events"), "planner", "running", "designing deck structure")
 
+    # ---- 1. Pick a design brief once per deck (palette + motif + typography) ----
+    brief_msg = llm(0.7).invoke([
+        SystemMessage(content=DESIGN_BRIEF_SYSTEM),
+        HumanMessage(content=f"RM brief: {state.get('rm_query','')}\nClient: {state.get('client','')}\nTopic: {state.get('topic','')}"),
+    ])
+    design_brief = _parse_json(brief_msg.content) or {
+        "palette": {"bg": "#0a1628", "ink": "#f5f3ee", "accent": "#c9a84c", "muted": "#4a5568"},
+        "fontPair": {"display": "Georgia, serif", "body": "Inter, system-ui"},
+        "motif": "thin gold rule beneath every title",
+    }
+    logger.info("planner: design_brief=%s", design_brief)
+
     context = {
         "rm_query": state.get("rm_query"),
         "client": state.get("client"),
@@ -397,6 +409,8 @@ def planner_node(state: PitchbookState) -> PitchbookState:
         "crm": state.get("crm"),
         "competitors": state.get("competitors"),
         "financials": state.get("financials"),
+        "design_brief": design_brief,
+        "active_template": state.get("active_template_catalogue", ""),
     }
 
     try:
