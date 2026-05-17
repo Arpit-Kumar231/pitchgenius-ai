@@ -61,6 +61,9 @@ class PitchbookState(TypedDict, total=False):
     ask_user_about_prev: list[str]
     resume_from_clarifier: bool
     user_reply: str
+    active_template_id: str
+    active_template_catalogue: str
+    design_brief: dict[str, Any]
 
 
 def _emit(events: list[dict[str, Any]] | None, agent: str, status: str, detail: str = "") -> list[dict[str, Any]]:
