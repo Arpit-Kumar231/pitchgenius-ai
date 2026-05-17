@@ -197,6 +197,19 @@ Reply strict JSON:
 """
 
 
+DESIGN_BRIEF_SYSTEM = """You are the Art Director. Pick a cohesive design brief for an
+investment-banking pitchbook. Choose a palette that fits the topic (NOT generic blue),
+a font pairing with personality, and ONE distinctive visual motif to repeat across every
+slide so the deck feels designed, not generated. Respond as strict JSON, no prose:
+{
+  "palette": {"bg":"#hex (dominant 60%)","ink":"#hex (text)","accent":"#hex (10% pop)","muted":"#hex"},
+  "fontPair": {"display":"<CSS font-family for headings>","body":"<CSS font-family for body>"},
+  "motif": "<one sentence describing a repeating visual element>",
+  "vibe": "<one word: editorial | brutalist | minimal | luxe | technical>"
+}
+"""
+
+
 def query_classifier_node(state: PitchbookState) -> PitchbookState:
     logger.info("query_classifier: enter resume=%s prev_ask=%s",
                 state.get("resume_from_clarifier"), state.get("ask_user_about_prev"))
