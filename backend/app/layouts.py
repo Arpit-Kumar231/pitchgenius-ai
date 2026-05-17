@@ -102,6 +102,20 @@ LAYOUTS: dict[str, dict] = {
             "notes": "string (optional) — short note describing the slide intent (for the editor agent later)",
         },
     },
+    "dynamic_tsx": {
+        "name": "Dynamic Template Layout",
+        "description": (
+            "Renders a reusable layout previously generated from an uploaded PPTX "
+            "template. Use ONLY when an active template is provided in context and "
+            "its structure matches the slide's intent. Refer to layouts by id "
+            "exactly as listed in the active template catalogue."
+        ),
+        "props_shape": {
+            "templateId": "string (required) — id of the uploaded template",
+            "layoutId": "string (required) — id of the layout within that template",
+            "data": "object (required) — must match the layout's Zod schema (see template catalogue)",
+        },
+    },
 }
 
 
@@ -131,6 +145,7 @@ def validate_slide(layout_id: str, props: dict) -> tuple[bool, str]:
         "two_column": ["title", "left", "right"],
         "closing": ["contacts"],
         "custom_html": ["html"],
+        "dynamic_tsx": ["templateId", "layoutId", "data"],
     }[layout_id]
     for k in required:
         if k not in props:
