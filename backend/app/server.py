@@ -23,6 +23,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from .agents import GRAPH, run_editor
+from .templates import router as templates_router, template_catalogue_for_prompt
 
 # ---- Logging --------------------------------------------------------------
 logging.basicConfig(
@@ -39,6 +40,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(templates_router)
 
 
 @app.exception_handler(Exception)
@@ -59,6 +62,7 @@ class ChatRequest(BaseModel):
     message: str
     client: str | None = None
     topic: str | None = None
+    active_template_id: str | None = None
 
 
 def _initial_state(req: ChatRequest, prior: dict[str, Any] | None) -> dict[str, Any]:
@@ -68,6 +72,10 @@ def _initial_state(req: ChatRequest, prior: dict[str, Any] | None) -> dict[str, 
         "topic": req.topic or (prior or {}).get("topic") or "",
         "completed": [],
         "events": [],
+        "active_template_catalogue": (
+            template_catalogue_for_prompt(req.active_template_id) if req.active_template_id else ""
+        ),
+        "active_template_id": req.active_template_id or "",
     }
     if not prior:
         return state
@@ -160,6 +168,7 @@ class EditRequest(BaseModel):
     instruction: str
     deck: dict[str, Any]
     activeSlideIndex: int | None = None
+    thread_id: str | None = None
 
 
 @app.post("/edit/stream")
@@ -169,10 +178,13 @@ async def edit_stream(req: EditRequest):
     logger.info("edit/stream slides=%d active=%s instr=%r",
                 len(req.deck.get("slides", []) or []), req.activeSlideIndex, req.instruction[:160])
 
+    thread = THREADS.get(req.thread_id) if req.thread_id else None
+    edit_history = (thread or {}).get("edit_history", []) if thread else []
+
     async def gen():
         yield _sse("agent", {"agent": "editor", "status": "running", "detail": "interpreting edit"})
         try:
-            result = run_editor(req.deck, req.instruction, req.activeSlideIndex)
+            result = run_editor(req.deck, req.instruction, req.activeSlideIndex, edit_history)
         except Exception as e:
             logger.exception("editor failed")
             yield _sse("error", {"message": f"{e.__class__.__name__}: {e}"})
@@ -184,6 +196,18 @@ async def edit_stream(req: EditRequest):
                 yield _sse("slide.add", {"index": p.get("index"), "slide": p.get("slide")})
             else:  # replace
                 yield _sse("slide.replace", p)
+        # Persist edit memory
+        if req.thread_id:
+            t = THREADS.setdefault(req.thread_id, {})
+            hist = t.setdefault("edit_history", [])
+            hist.append({
+                "instruction": req.instruction,
+                "active": req.activeSlideIndex,
+                "summary": result.get("summary", ""),
+                "n_patches": len(patches),
+            })
+            # cap to last 20
+            t["edit_history"] = hist[-20:]
         yield _sse("agent", {"agent": "editor", "status": "done",
                              "detail": f"{len(patches)} slide{'s' if len(patches) != 1 else ''} updated"})
         yield _sse("final", {"answer": result.get("summary", "Updated.")})
