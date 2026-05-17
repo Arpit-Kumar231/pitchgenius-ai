@@ -503,6 +503,7 @@ def planner_node(state: PitchbookState) -> PitchbookState:
         "completed": completed,
         "events": events,
         "final_answer": final,
+        "design_brief": design_brief,
     }
 
 
@@ -587,16 +588,30 @@ Respond with strict JSON, no prose, no fences:
 """
 
 
-def run_editor(deck: dict[str, Any], instruction: str, active_index: int | None) -> dict[str, Any]:
+def run_editor(
+    deck: dict[str, Any],
+    instruction: str,
+    active_index: int | None,
+    edit_history: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Returns {"patches": [...], "summary": "..."} with validated slides only.
     Patches can be either "replace" (modify existing) or "add" (insert new) operations."""
+    history = edit_history or []
+    # Build a "lessons learned" hint: if the user asked twice for the same kind
+    # of change, surface it so the model doesn't repeat the mistake.
+    lessons = ""
+    if history:
+        recent = history[-6:]
+        lessons = "\n# Prior edit attempts in this thread (avoid repeating the same mistake):\n"
+        for h in recent:
+            lessons += f"- '{h.get('instruction','')[:140]}' → {h.get('summary','')[:140]}\n"
     user = {
         "instruction": instruction,
         "activeSlideIndex": active_index,
         "deck": deck,
     }
     msg = llm(0.3).invoke([
-        SystemMessage(content=EDITOR_SYSTEM),
+        SystemMessage(content=EDITOR_SYSTEM + lessons),
         HumanMessage(content=json.dumps(user, default=str, indent=2)),
     ])
     out = _parse_json(msg.content) or {}
